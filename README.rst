@@ -18,8 +18,9 @@ pre-activation order for the CIFAR10 dataset use something like the code below.
     model = Model.cifar_model(n=18, multiplicity=4, type='B')
 
 
-Please note that by default all classes like ``RoR`` or ``StochasticDepth``
-will use the original resnet (not the pre-activation order).
+Please note that by default all classes like ``StochasticDepth``, ``RoR`` or
+``MultiResNet`` can only be used together with ``ResNet``, ``PreResNet`` or
+``WeightedResNet`` as seen in the example above.
 
 To build a network for a CIFAR or SVHN model use the class method
 ``cifar_model``. For the ImageNet models there are multiple class methods for
@@ -31,42 +32,44 @@ the class can also be used to create custom networks.
 ResNets Classes
 ---------------
 
-``BaseResNet``
-    implements the original resnet as in [1]_.
+``ResNet``
+    implements the original resnet as in [1]_, as well as the wide approach
+    from [5]_ without the pre-activation order.
+    It also implements a slightly different projection method when the shortcut
+    type is ``'B'`` or ``'C'`` and the dimensions increase. It may performs a
+    pooling operation before the 1x1 convolution. This will thereby use all the
+    inputs (not just 1 out of 4 pixels) when changing dimensions.
 
-``PreResNet``
-    implements the pre-activation order version from [2]_.
+``PreResnet``
+    implements the pre-activation order version from [2]_ and [5]_.
+    It also provides different projections for handling the dimension
+    increase as ``ResNet``.
 
 ``WeightedResNet``
     is to build a network with weighted residuals as in [3]_.
-
-``ResNet``
-    uses a slightly different projection for (original and
-    pre-activation) resnets, when the shortcut type is ``'B'`` or ``'C'`` and
-    the dimensions increase. Similar to the original it uses a 1x1 convolution,
-    but performs a pooling operation before that. This will thereby use all the
-    inputs (not just 1 out of 4 pixels) when changing dimensions.
+    It also implements a wide version of the network, analogous to [5]_.
 
 ``StochasticDepth``
-    will create a resnet (orig., pre, or weighted) with a stochastic depth
-    similar to [4]_. The difference in this implementation is that the output
-    of a residual is scaled in training rather than while testing.
-
-``WideResNet``
-    implements the wide approach as described by [5]_. This class works (thus
-    far) not together with ``WeightedResNet``.
+    is used together with one of the previous three classes and will create
+    resnets (orig., pre, or weighted) with a stochastic depth similar to [4]_.
+    The difference in this implementation is that the output of a residual is
+    scaled in training rather than while testing.
 
 ``PReluResNet``
+    is used together with ``ResNet``, ``PreResNet`` or ``WeightedResNet`` and
     replaces the ReLU nonlinearity with a parametric rectifying unit.
 
 ``RoR``
-    create (original and pre-activation) resnets with multilevel shortcut as
-    described in [6]_.
+    is used together with ``ResNet`` or ``PreResNet`` and creates
+    resnets with multilevel shortcut as described in [6]_.
 
 ``MultiResNet``
-    creates multi-residual (original, pre-activation or weighted) networks as
-    described in [7]_. Those networks have multiple residuals added to the
-    shortcuts.
+    is used together with ``ResNet``, ``PreResNet`` or ``WeightedResNet`` and
+    creates multi-residual networks as described in [7]_. Those networks have
+    multiple residuals added to the shortcuts.
+    When this class is used together with ``StochasticDepth`` please pay
+    attention of the ordering in the MRO and see the documentation for further
+    information.
 
 
 Densenets Classes

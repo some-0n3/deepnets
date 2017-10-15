@@ -6,7 +6,7 @@ The module provides builder classes to conveniently create deep
 residual networks. Those builder come with methods to create the models
 used by He et al. for the CIFAR and ImageNet data sets.
 
-The module provides network architectures from the following papers:
+The module covers network architectures from the following papers:
 
 * The original ResNet from `Deep Residual Learning for Image Recognition
   <https://arxiv.org/abs/1512.03385>`_.
@@ -33,13 +33,9 @@ The module provides network architectures from the following papers:
   number of residuals per block by a constant factor.
 
 
-Please note that all builder classes use the (first) basic ResNets
-as basis. To get a ResNet of ResNet with stochastic depth and the
-pre-activation order use something like the following code:
-
 >>> class DummyClass(RoR, StochasticDepth, PreResNet):
 >>>     pass
->>> 
+>>>
 >>> model = DummyClass.cifar_model(n=27, bottleneck=True, m=3)
 """
 import numpy
@@ -52,7 +48,7 @@ from lasagne.nonlinearities import rectify, softmax
 
 
 __all__ = ('ResNet', 'PreResNet', 'WeightedResNet', 'StochasticDepth',
-           'WideResNet', 'RoR', 'MultiResNet', 'PReLuResNet')
+           'RoR', 'MultiResNet', 'PReLuResNet')
 
 
 def get_dimensions(incoming, num_filters=None, dim_inc=False,
@@ -68,9 +64,97 @@ def get_dimensions(incoming, num_filters=None, dim_inc=False,
     return num_filters, stride, out_filters
 
 
-class BaseResNet(object):
-    """Basic (Original) ResNet as in `He et al.
-    <https://arxiv.org/abs/1512.03385>`_.
+class ResNetMixin():
+    """Base class for all resnets.
+
+    Parameters
+    ----------
+    incoming : instance of :class:`Layer`
+        The network's input layer.
+    bottleneck : boolean (``False``)
+        Use the 3 layer bottleneck approach if ``True``.
+    width : integer (``1``)
+        The parameter $k§ from the wide resnet approach.
+    block_config :  tuple of integers or integer pairs or ``None``
+        The list of convolutions in a residual block. The list describes
+        the filter size of each convolution in the block. The filter
+        size can be given as a tuple of integers or as a single integer,
+        in which case a quadratic filter is used. This was described as
+        parameter $B$ in the wide approach. In case of ``None``,
+        ``block_config`` is either ``(3, 3)`` or ``(1, 3, 1)`` depending
+        on ``bottleneck``.
+    dropout : a scalar between 0 and 1 (``0``)
+        The dropout probability for each dropout layer. In case the
+        dropout probability is ``0`` no dropout is applied.
+    """
+
+    def __init__(self, incoming, bottleneck=False, width=1, block_config=None,
+                 dropout=0):
+        self.model = incoming
+        self.bottleneck = bottleneck
+
+        self.residuals = []
+        self.shortcuts = []
+        self.resblocks = []
+
+        self.width = width
+        if block_config is None:
+            block_config = (1, 3, 1) if bottleneck else (3, 3)
+        self.block_config = [b if isinstance(b, tuple) else (b, b)
+                             for b in block_config]
+        self.dropout = dropout
+        if bottleneck and len(block_config) < 3:
+            raise ValueError('In case of bottlenecking, a residual block'
+                             ' should have at least three layers.')
+
+    @staticmethod
+    def convolution(model, num_filters, filter_size=(3, 3), stride=(1, 1),
+                    init_gain='relu', pad='same'):
+        """Standard convolution method."""
+        return Conv2DLayer(
+            model, num_filters=num_filters, filter_size=filter_size,
+            stride=stride, nonlinearity=None, pad=pad,
+            W=HeNormal(gain=init_gain), b=None, flip_filters=False
+        )
+
+    @staticmethod
+    def nonlinearity(incoming):
+        """Apply the standard nonlinearity."""
+        return NonlinearityLayer(incoming, nonlinearity=rectify)
+
+    @classmethod
+    def imagenet_18(cls, bottleneck=False, **kwargs):
+        """The 18 layer network for the ImageNet data set."""
+        return cls.image_net_model([(2, 64), (2, 128), (2, 256), (2, 512), ],
+                                   bottleneck=bottleneck, **kwargs)
+
+    @classmethod
+    def imagenet_34(cls, bottleneck=False, **kwargs):
+        """The 34 layer network for the ImageNet data set."""
+        return cls.image_net_model([(3, 64), (4, 128), (6, 256), (3, 512), ],
+                                   bottleneck=bottleneck, **kwargs)
+
+    @classmethod
+    def imagenet_50(cls, bottleneck=True, **kwargs):
+        """The 50 layer network for the ImageNet data set."""
+        return cls.image_net_model([(3, 64), (4, 128), (6, 256), (3, 512), ],
+                                   bottleneck=bottleneck, **kwargs)
+
+    @classmethod
+    def imagenet_101(cls, bottleneck=True, **kwargs):
+        """The 101 layer network for the ImageNet data set."""
+        return cls.image_net_model([(3, 64), (4, 128), (23, 256), (3, 512), ],
+                                   bottleneck=bottleneck, **kwargs)
+
+    @classmethod
+    def imagenet_152(cls, bottleneck=True, **kwargs):
+        """The 152 layer network for the ImageNet data set."""
+        return cls.image_net_model([(3, 64), (8, 128), (36, 256), (3, 512), ],
+                                   bottleneck=bottleneck, **kwargs)
+
+
+class HeResNet(ResNetMixin):
+    """Base class for all resnets by He et al.
 
     Parameters
     ----------
@@ -80,57 +164,78 @@ class BaseResNet(object):
         The type of shortcuts to use.
     bottleneck : boolean (``False``)
         Use the 3 layer bottleneck approach if ``True``.
+    width : integer (``1``)
+        The parameter $k§ from the wide resnet approach.
+    block_config :  tuple of integers or integer pairs or ``None``
+        The list of convolutions in a residual block. The list describes
+        the filter size of each convolution in the block. The filter
+        size can be given as a tuple of integers or as a single integer,
+        in which case a quadratic filter is used. This was described as
+        parameter $B$ in the wide approach. In case of ``None``,
+        ``block_config`` is either ``(3, 3)`` or ``(1, 3, 1)`` depending
+        on ``bottleneck``.
+    dropout : a scalar between 0 and 1 (``0``)
+        The dropout probability for each dropout layer. In case the
+        dropout probability is ``0`` no dropout is applied.
+    dim_inc_meth : ``'1x1'``, ``'2x2'``, ``'avg'``, ``'max'`` or ``'sum'``
+        The type of projection method to use for increasing the
+        dimensions. This parameter will be ignored if the type of
+        shortcut is ``'A'`` because it uses padding. For the types
+        ``'B'`` and ``'C'`` there are multiple ways to change the
+        dimensions:
+
+        ``'1x1'`` will perform a 1x1 convolution with a 2x2 stride. This
+        is the original approach from the paper, but will discard 3/4 of
+        the input.
+
+        ``'2x2'`` will perform a 2x2 convolution with a 2x2 stride, which
+        will increase the amount of free parameters, but won't discard
+        any inputs.
+
+        ``'sum'``, ``'avg'``, ``'max'`` will perform a 1x1 convolution
+        (with a 1x1 stride) followed by either sum, average or max
+        pooling respectively. This will not lead to any increase in free
+        parameters and (hopefully) not discard any important information.
     """
 
-    def __init__(self, incoming, type='A', bottleneck=False):
-        self.model = incoming
+    dim_inc_methods = ('1x1', '2x2', 'max', 'avg', 'sum')
+
+    def __init__(self, *args, type='A', dim_inc_meth='1x1', **kwargs):
+        super(HeResNet, self).__init__(*args, **kwargs)
+
         self.type = type
-        self.bottleneck = bottleneck
 
-        self.residuals = []
-        self.shortcuts = []
-        self.resblocks = []
-
-    @staticmethod
-    def convolution(model, num_filters, filter_size=(3, 3), stride=(1, 1),
-                    init_gain='relu', pad='same'):
-        """Standard convolution method."""
-        return BatchNormLayer(Conv2DLayer(
-            model, num_filters=num_filters, filter_size=filter_size,
-            stride=stride, nonlinearity=None, pad=pad,
-            W=HeNormal(gain=init_gain), b=None, flip_filters=False
-        ))
-
-    @staticmethod
-    def nonlinearity(incoming):
-        """Apply the standard nonlinearity."""
-        return NonlinearityLayer(incoming, nonlinearity=rectify)
+        if dim_inc_meth not in self.dim_inc_methods:
+            raise ValueError(
+                'The method "{}" is not supported.'.format(dim_inc_meth))
+        self.pooling = dim_inc_meth in {'max', 'avg', 'sum'}
+        if dim_inc_meth == 'avg':
+            dim_inc_meth = 'average_exc_pad'
+        self.dim_inc = dim_inc_meth
 
     def projection(self, model, num_filters, stride=(1, 1), init_gain=1.0,
                    **kwargs):
         """Standard projection method."""
-        return self.convolution(model, num_filters, (1, 1), stride=stride,
-                                init_gain=init_gain, **kwargs)
+        if stride == (1, 1):
+            return self.convolution(model, num_filters, filter_size=(1, 1),
+                                    stride=stride, init_gain=init_gain,
+                                    **kwargs)
+        filter_size = 1, 1
+        pad = 'same'
+        if self.dim_inc == '2x2':
+            filter_size = stride
+            pad = 'valid'
+        elif self.pooling:
+            oldstride = stride
+            stride = 1, 1
 
-    def residual(self, model, num_filters=None, dim_inc=False):
-        """Return a residual block."""
-        num_filters, first_stride, out_filters = get_dimensions(
-            model, num_filters, dim_inc, self.bottleneck)
-
-        if self.bottleneck:
-            residual = self.convolution(model, num_filters, filter_size=(1, 1),
-                                        stride=first_stride)
-            residual = self.nonlinearity(residual)
-            residual = self.convolution(residual, num_filters)
-            residual = self.nonlinearity(residual)
-            residual = self.convolution(residual, out_filters,
-                                        filter_size=(1, 1))
-        else:
-            residual = self.convolution(model, num_filters,
-                                        stride=first_stride)
-            residual = self.nonlinearity(residual)
-            residual = self.convolution(residual, num_filters)
-        return residual
+        model = self.convolution(model, num_filters, filter_size=filter_size,
+                                 stride=stride, pad=pad, init_gain=init_gain,
+                                 **kwargs)
+        if self.pooling:
+            model = Pool2DLayer(model, oldstride, ignore_border=False,
+                                mode=self.dim_inc)
+        return model
 
     def shortcut(self, incoming, residual, type=None):
         """Create a shortcut from ``incoming`` to ``residual``."""
@@ -157,6 +262,91 @@ class BaseResNet(object):
             side = (out_filters - in_filters) // 2
             return PadLayer(shortcut, [side, 0, 0], batch_ndim=1)
 
+
+class ResNet(HeResNet):
+    """The original and wide resnet approach (without pre-activation order).
+
+    This class implements the original resent approach by `He et al.
+    <https://arxiv.org/abs/1512.03385>`_, as well as the the wide approach by
+    `Zagoruyko et al. <https://arxiv.org/abs/1605.08831>`_ without
+    pre-activation order. It also implements different options for handling
+    the dimension increase for the types `'B'` and `'C'`.
+
+    Parameters
+    ----------
+    incoming : instance of :class:`Layer`
+        The network's input layer.
+    type : ``'A'``, ``'B'`` or ``'C'`` (``'A'``)
+        The type of shortcuts to use.
+    bottleneck : boolean (``False``)
+        Use the 3 layer bottleneck approach if ``True``.
+    width : integer (``1``)
+        The parameter $k§ from the wide resnet approach.
+    block_config :  tuple of integers or integer pairs or ``None``
+        The list of convolutions in a residual block. The list describes
+        the filter size of each convolution in the block. The filter
+        size can be given as a tuple of integers or as a single integer,
+        in which case a quadratic filter is used. This was described as
+        parameter $B$ in the wide approach. In case of ``None``,
+        ``block_config`` is either ``(3, 3)`` or ``(1, 3, 1)`` depending
+        on ``bottleneck``.
+    dropout : a scalar between 0 and 1 (``0``)
+        The dropout probability for each dropout layer. In case the
+        dropout probability is ``0`` no dropout is applied.
+    dim_inc_meth : ``'1x1'``, ``'2x2'``, ``'avg'``, ``'max'`` or ``'sum'``
+        The type of projection method to use for increasing the
+        dimensions. This parameter will be ignored if the type of
+        shortcut is ``'A'`` because it uses padding. For the types
+        ``'B'`` and ``'C'`` there are multiple ways to change the
+        dimensions:
+
+        ``'1x1'`` will perform a 1x1 convolution with a 2x2 stride. This
+        is the original approach from the paper, but will discard 3/4 of
+        the input.
+
+        ``'2x2'`` will perform a 2x2 convolution with a 2x2 stride, which
+        will increase the amount of free parameters, but won't discard
+        any inputs.
+
+        ``'sum'``, ``'avg'``, ``'max'`` will perform a 1x1 convolution
+        (with a 1x1 stride) followed by either sum, average or max
+        pooling respectively. This will not lead to any increase in free
+        parameters and (hopefully) not discard any important information.
+    """
+
+    def convolution(self, *args, **kwargs):
+        return BatchNormLayer(
+            super(ResNet, self).convolution(*args, **kwargs))
+
+    def residual(self, model, num_filters=None, dim_inc=False):
+        """Return a residual block."""
+        num_filters *= self.width
+        num_filters, first_stride, out_filters = get_dimensions(
+            model, num_filters, dim_inc, self.bottleneck)
+
+        residual = self.convolution(model, num_filters, stride=first_stride,
+                                    filter_size=self.block_config[0])
+        if self.bottleneck:
+            for filter_size in self.block_config[1:-1]:
+                residual = self.nonlinearity(residual)
+                if self.dropout > 0:
+                    residual = DropoutLayer(residual, self.dropout)
+                residual = self.convolution(residual, num_filters,
+                                            filter_size=filter_size)
+            residual = self.nonlinearity(residual)
+            if self.dropout > 0:
+                residual = DropoutLayer(residual, self.dropout)
+            residual = self.convolution(residual, out_filters,
+                                        filter_size=self.block_config[-1])
+        else:
+            for filter_size in self.block_config[1:]:
+                residual = self.nonlinearity(residual)
+                if self.dropout > 0:
+                    residual = DropoutLayer(residual, self.dropout)
+                residual = self.convolution(residual, num_filters,
+                                            filter_size=filter_size)
+        return residual
+
     def add_residual_block(self, num_filters=None, dim_inc=False):
         """Add a residual block (residual + shortcut) to the network."""
         residual = self.residual(self.model, num_filters, dim_inc)
@@ -170,19 +360,53 @@ class BaseResNet(object):
 
     @classmethod
     def cifar_model(cls, n=9, incoming=None, classes=10, **kwargs):
-        """Create model for the CIFAR data set like in section 4.2.
+        """Create model for the CIFAR data set.
 
         Parameters
         ----------
         n : integer (``9``)
             A parameter used to govern the size of the network as
             described in the paper.
-        incoming :  a :class:`Layer` instance or ``None``
+        incoming :  a :class:`Layer` instance or ``None`` (``None``)
             The input layer, if it is ``None`` a new one will be created.
-        classes : integer (`10``)
+        classes : integer (``10``)
             The number of classes to train, usually ``10`` or ``100``.
-        kwargs : key-word arguments
-            The key-word arguments that get passed down to the constructor.
+        type : ``'A'``, ``'B'`` or ``'C'`` (``'A'``)
+            The type of shortcuts to use.
+        bottleneck : boolean (``False``)
+            Use the 3 layer bottleneck approach if ``True``.
+        width : integer (``1``)
+            The parameter $k§ from the wide resnet approach.
+        block_config :  tuple of integers or integer pairs or ``None``
+            The list of convolutions in a residual block. The list describes
+            the filter size of each convolution in the block. The filter
+            size can be given as a tuple of integers or as a single integer,
+            in which case a quadratic filter is used. This was described as
+            parameter $B$ in the wide approach. In case of ``None``,
+            ``block_config`` is either ``(3, 3)`` or ``(1, 3, 1)`` depending
+            on ``bottleneck``.
+        dropout : a scalar between 0 and 1 (``0``)
+            The dropout probability for each dropout layer. In case the
+            dropout probability is ``0`` no dropout is applied.
+        dim_inc_meth : ``'1x1'``, ``'2x2'``, ``'avg'``, ``'max'`` or ``'sum'``
+            The type of projection method to use for increasing the
+            dimensions. This parameter will be ignored if the type of
+            shortcut is ``'A'`` because it uses padding. For the types
+            ``'B'`` and ``'C'`` there are multiple ways to change the
+            dimensions:
+
+            ``'1x1'`` will perform a 1x1 convolution with a 2x2 stride. This
+            is the original approach from the paper, but will discard 3/4 of
+            the input.
+
+            ``'2x2'`` will perform a 2x2 convolution with a 2x2 stride, which
+            will increase the amount of free parameters, but won't discard
+            any inputs.
+
+            ``'sum'``, ``'avg'``, ``'max'`` will perform a 1x1 convolution
+            (with a 1x1 stride) followed by either sum, average or max
+            pooling respectively. This will not lead to any increase in free
+            parameters and (hopefully) not discard any important information.
 
         Returns
         -------
@@ -240,8 +464,42 @@ class BaseResNet(object):
             The input layer, if it is ``None`` a new one will be created.
         classes : integer (``1000``)
             The number of classes to train, usually ``1000`'.
-        kwargs : key-word arguments
-            The key-word arguments that get passed down to the constructor.
+        type : ``'A'``, ``'B'`` or ``'C'`` (``'A'``)
+            The type of shortcuts to use.
+        bottleneck : boolean (``False``)
+            Use the 3 layer bottleneck approach if ``True``.
+        width : integer (``1``)
+            The parameter $k§ from the wide resnet approach.
+        block_config :  tuple of integers or integer pairs or ``None``
+            The list of convolutions in a residual block. The list describes
+            the filter size of each convolution in the block. The filter
+            size can be given as a tuple of integers or as a single integer,
+            in which case a quadratic filter is used. This was described as
+            parameter $B$ in the wide approach. In case of ``None``,
+            ``block_config`` is either ``(3, 3)`` or ``(1, 3, 1)`` depending
+            on ``bottleneck``.
+        dropout : a scalar between 0 and 1 (``0``)
+            The dropout probability for each dropout layer. In case the
+            dropout probability is ``0`` no dropout is applied.
+        dim_inc_meth : ``'1x1'``, ``'2x2'``, ``'avg'``, ``'max'`` or ``'sum'``
+            The type of projection method to use for increasing the
+            dimensions. This parameter will be ignored if the type of
+            shortcut is ``'A'`` because it uses padding. For the types
+            ``'B'`` and ``'C'`` there are multiple ways to change the
+            dimensions:
+
+            ``'1x1'`` will perform a 1x1 convolution with a 2x2 stride. This
+            is the original approach from the paper, but will discard 3/4 of
+            the input.
+
+            ``'2x2'`` will perform a 2x2 convolution with a 2x2 stride, which
+            will increase the amount of free parameters, but won't discard
+            any inputs.
+
+            ``'sum'``, ``'avg'``, ``'max'`` will perform a 1x1 convolution
+            (with a 1x1 stride) followed by either sum, average or max
+            pooling respectively. This will not lead to any increase in free
+            parameters and (hopefully) not discard any important information.
 
         Returns
         -------
@@ -280,46 +538,19 @@ class BaseResNet(object):
                            nonlinearity=softmax)
         return model
 
-    @classmethod
-    def imagenet_18(cls, bottleneck=False, **kwargs):
-        """The 18 layer network for the ImageNet data set."""
-        return cls.image_net_model([(2, 64), (2, 128), (2, 256), (2, 512), ],
-                                   bottleneck=bottleneck, **kwargs)
 
-    @classmethod
-    def imagenet_34(cls, bottleneck=False, **kwargs):
-        """The 34 layer network for the ImageNet data set."""
-        return cls.image_net_model([(3, 64), (4, 128), (6, 256), (3, 512), ],
-                                   bottleneck=bottleneck, **kwargs)
-
-    @classmethod
-    def imagenet_50(cls, bottleneck=True, **kwargs):
-        """The 50 layer network for the ImageNet data set."""
-        return cls.image_net_model([(3, 64), (4, 128), (6, 256), (3, 512), ],
-                                   bottleneck=bottleneck, **kwargs)
-
-    @classmethod
-    def imagenet_101(cls, bottleneck=True, **kwargs):
-        """The 101 layer network for the ImageNet data set."""
-        return cls.image_net_model([(3, 64), (4, 128), (23, 256), (3, 512), ],
-                                   bottleneck=bottleneck, **kwargs)
-
-    @classmethod
-    def imagenet_152(cls, bottleneck=True, **kwargs):
-        """The 152 layer network for the ImageNet data set."""
-        return cls.image_net_model([(3, 64), (8, 128), (36, 256), (3, 512), ],
-                                   bottleneck=bottleneck, **kwargs)
-
-
-class PreResNet(BaseResNet):
-    """The revisited version of the ResNet (PreResNet).
+class PreResNet(HeResNet):
+    """The normal and wide resnet with pre-activation order.
 
     This is the version of a residual network as described in
     `Identity Mappings in Deep Residual Networks by He et al.
-    <https://arxiv.org/abs/1603.05027>`_. It uses the identity mapping
-    as skip connections and after-addition activation.
-    This improved generalization and made is possible to train a
-    network with a depth of over 1000 layer.
+    <https://arxiv.org/abs/1603.05027>`_ and also the wide
+    version of the network as in `Wide Residual Networks
+    <https://arxiv.org/abs/1605.08831>`_ by Zagoruyko et al.
+    The networks use identity mapping as skip connections and
+    after-addition activation. This improved generalization and made it
+    possible to train a network with a depth of over 1000 layer.
+    A wider (but shorter) approach may lead to better performance.
 
     Parameters
     ----------
@@ -329,35 +560,72 @@ class PreResNet(BaseResNet):
         The type of shortcuts to use.
     bottleneck : boolean (``False``)
         Use the 3 layer bottleneck approach if ``True``.
+    width : integer (``1``)
+        The parameter $k§ from the wide resnet approach.
+    block_config :  tuple of integers or integer pairs or ``None``
+        The list of convolutions in a residual block. The list describes
+        the filter size of each convolution in the block. The filter
+        size can be given as a tuple of integers or as a single integer,
+        in which case a quadratic filter is used. This was described as
+        parameter $B$ in the wide approach. In case of ``None``,
+        ``block_config`` is either ``(3, 3)`` or ``(1, 3, 1)`` depending
+        on ``bottleneck``.
+    dropout : a scalar between 0 and 1 (``0``)
+        The dropout probability for each dropout layer. In case the
+        dropout probability is ``0`` no dropout is applied.
+    dim_inc_meth : ``'1x1'``, ``'2x2'``, ``'avg'``, ``'max'`` or ``'sum'``
+        The type of projection method to use for increasing the
+        dimensions. This parameter will be ignored if the type of
+        shortcut is ``'A'`` because it uses padding. For the types
+        ``'B'`` and ``'C'`` there are multiple ways to change the
+        dimensions:
+
+        ``'1x1'`` will perform a 1x1 convolution with a 2x2 stride. This
+        is the original approach from the paper, but will discard 3/4 of
+        the input.
+
+        ``'2x2'`` will perform a 2x2 convolution with a 2x2 stride, which
+        will increase the amount of free parameters, but won't discard
+        any inputs.
+
+        ``'sum'``, ``'avg'``, ``'max'`` will perform a 1x1 convolution
+        (with a 1x1 stride) followed by either sum, average or max
+        pooling respectively. This will not lead to any increase in free
+        parameters and (hopefully) not discard any important information.
     """
 
-    def convolution(self, *args, **kwargs):
-        result = super(PreResNet, self).convolution(*args, **kwargs)
-        assert isinstance(result, BatchNormLayer)
-        return result.input_layer
-
     def residual(self, model, num_filters=None, dim_inc=False):
+        """Residual block for pre-resnet."""
+        num_filters *= self.width
         num_filters, first_stride, out_filters = get_dimensions(
             model, num_filters, dim_inc, self.bottleneck)
 
         residual = self.nonlinearity(BatchNormLayer(model))
+        residual = self.convolution(residual, num_filters, stride=first_stride,
+                                    filter_size=self.block_config[0])
         if self.bottleneck:
-            residual = self.convolution(residual, num_filters,
-                                        filter_size=(1, 1),
-                                        stride=first_stride)
+            for filter_size in self.block_config[1:-1]:
+                residual = self.nonlinearity(BatchNormLayer(residual))
+                if self.dropout > 0:
+                    residual = DropoutLayer(residual, self.dropout)
+                residual = self.convolution(residual, num_filters,
+                                            filter_size=filter_size)
             residual = self.nonlinearity(BatchNormLayer(residual))
-            residual = self.convolution(residual, num_filters)
-            residual = self.nonlinearity(BatchNormLayer(residual))
+            if self.dropout > 0:
+                residual = DropoutLayer(residual, self.dropout)
             residual = self.convolution(residual, out_filters,
-                                        filter_size=(1, 1))
+                                        filter_size=self.block_config[-1])
         else:
-            residual = self.convolution(residual, num_filters,
-                                        stride=first_stride)
-            residual = self.nonlinearity(BatchNormLayer(residual))
-            residual = self.convolution(residual, num_filters)
+            for filter_size in self.block_config[1:]:
+                residual = self.nonlinearity(BatchNormLayer(residual))
+                if self.dropout > 0:
+                    residual = DropoutLayer(residual, self.dropout)
+                residual = self.convolution(residual, num_filters,
+                                            filter_size=filter_size)
         return residual
 
     def add_residual_block(self, num_filters=None, dim_inc=False):
+        """Add a residual block (residual + shortcut) to the network."""
         residual = self.residual(self.model, num_filters, dim_inc)
         self.residuals.append(residual)
 
@@ -369,6 +637,59 @@ class PreResNet(BaseResNet):
 
     @classmethod
     def cifar_model(cls, n=9, incoming=None, classes=10, **kwargs):
+        """Create model for the CIFAR data set.
+
+        Parameters
+        ----------
+        n : integer (``9``)
+            A parameter used to govern the size of the network as
+            described in the paper.
+        incoming :  a :class:`Layer` instance or ``None`` (``None``)
+            The input layer, if it is ``None`` a new one will be created.
+        classes : integer (``10``)
+            The number of classes to train, usually ``10`` or ``100``.
+        type : ``'A'``, ``'B'`` or ``'C'`` (``'A'``)
+            The type of shortcuts to use.
+        bottleneck : boolean (``False``)
+            Use the 3 layer bottleneck approach if ``True``.
+        width : integer (``1``)
+            The parameter $k§ from the wide resnet approach.
+        block_config :  tuple of integers or integer pairs or ``None``
+            The list of convolutions in a residual block. The list describes
+            the filter size of each convolution in the block. The filter
+            size can be given as a tuple of integers or as a single integer,
+            in which case a quadratic filter is used. This was described as
+            parameter $B$ in the wide approach. In case of ``None``,
+            ``block_config`` is either ``(3, 3)`` or ``(1, 3, 1)`` depending
+            on ``bottleneck``.
+        dropout : a scalar between 0 and 1 (``0``)
+            The dropout probability for each dropout layer. In case the
+            dropout probability is ``0`` no dropout is applied.
+        dim_inc_meth : ``'1x1'``, ``'2x2'``, ``'avg'``, ``'max'`` or ``'sum'``
+            The type of projection method to use for increasing the
+            dimensions. This parameter will be ignored if the type of
+            shortcut is ``'A'`` because it uses padding. For the types
+            ``'B'`` and ``'C'`` there are multiple ways to change the
+            dimensions:
+
+            ``'1x1'`` will perform a 1x1 convolution with a 2x2 stride. This
+            is the original approach from the paper, but will discard 3/4 of
+            the input.
+
+            ``'2x2'`` will perform a 2x2 convolution with a 2x2 stride, which
+            will increase the amount of free parameters, but won't discard
+            any inputs.
+
+            ``'sum'``, ``'avg'``, ``'max'`` will perform a 1x1 convolution
+            (with a 1x1 stride) followed by either sum, average or max
+            pooling respectively. This will not lead to any increase in free
+            parameters and (hopefully) not discard any important information.
+
+        Returns
+        -------
+        a :class:`DenseLayer` instance
+            The model in form of its last layer.
+        """
         model = incoming or InputLayer(shape=(None, 3, 32, 32))
         builder = cls(model, **kwargs)
 
@@ -401,6 +722,67 @@ class PreResNet(BaseResNet):
 
     @classmethod
     def image_net_model(cls, config, incoming=None, classes=1000, **kwargs):
+        """Create a network for the ImageNet data set.
+
+        This is a helper function to create multiple networks like the
+        ones in the paper. What specific model is used is determined by
+        the ``config`` parameter. This parameter is a list of tuples
+        (``num_blocks``, ``num_filters``). For each tuple there will be
+        ``num_blocks`` residual block created with ``num_filters``
+        channels at each layer (except the bottleneck layers).
+        Except for the first tuple in the configuration, the dimensions
+        are increased at the beginning of every entry in ``config``.
+
+        Parameters
+        ----------
+        config : list of integer pairs
+            The configuration as a list of tuples.
+        incoming :  a :class:`Layer` instance or ``None`` (``None``)
+            The input layer, if it is ``None`` a new one will be created.
+        classes : integer (``1000``)
+            The number of classes to train, usually ``1000`'.
+        type : ``'A'``, ``'B'`` or ``'C'`` (``'A'``)
+            The type of shortcuts to use.
+        bottleneck : boolean (``False``)
+            Use the 3 layer bottleneck approach if ``True``.
+        width : integer (``1``)
+            The parameter $k§ from the wide resnet approach.
+        block_config :  tuple of integers or integer pairs or ``None``
+            The list of convolutions in a residual block. The list describes
+            the filter size of each convolution in the block. The filter
+            size can be given as a tuple of integers or as a single integer,
+            in which case a quadratic filter is used. This was described as
+            parameter $B$ in the wide approach. In case of ``None``,
+            ``block_config`` is either ``(3, 3)`` or ``(1, 3, 1)`` depending
+            on ``bottleneck``.
+        dropout : a scalar between 0 and 1 (``0``)
+            The dropout probability for each dropout layer. In case the
+            dropout probability is ``0`` no dropout is applied.
+        dim_inc_meth : ``'1x1'``, ``'2x2'``, ``'avg'``, ``'max'`` or ``'sum'``
+            The type of projection method to use for increasing the
+            dimensions. This parameter will be ignored if the type of
+            shortcut is ``'A'`` because it uses padding. For the types
+            ``'B'`` and ``'C'`` there are multiple ways to change the
+            dimensions:
+
+            ``'1x1'`` will perform a 1x1 convolution with a 2x2 stride. This
+            is the original approach from the paper, but will discard 3/4 of
+            the input.
+
+            ``'2x2'`` will perform a 2x2 convolution with a 2x2 stride, which
+            will increase the amount of free parameters, but won't discard
+            any inputs.
+
+            ``'sum'``, ``'avg'``, ``'max'`` will perform a 1x1 convolution
+            (with a 1x1 stride) followed by either sum, average or max
+            pooling respectively. This will not lead to any increase in free
+            parameters and (hopefully) not discard any important information.
+
+        Returns
+        -------
+        a :class:`DenseLayer` instance
+            The model in form of its last layer.
+        """
         # staring block
         model = incoming or InputLayer(shape=(None, 3, 224, 224))
         builder = cls(model, **kwargs)
@@ -435,13 +817,18 @@ class PreResNet(BaseResNet):
         return model
 
 
-class WeightedResNet(BaseResNet):
+class WeightedResNet(ResNetMixin):
     """The residual network with weighted residual blocks.
 
-    It follows `Weighted Residuals for Very Deep Networks by Shen et al.
-    <https://arxiv.org/abs/1605.08831>`_. The network scales every
-    residual block with a weight between -1 and 1. It also uses a
-    different way of increasing the dimensions in the network.
+    This class creates a weighted resnet as described in `Weighted
+    Residuals for Very Deep Networks by Shen et al.
+    <https://arxiv.org/abs/1605.08831>`_. The networks are based on the
+    original resnet approach, but add a scaled residual block with a
+    scale between -1 and 1. It also has a different way of handling the
+    dimension increase in the network.
+    This class also supports a way to widen the network as in `Wide
+    Residual Networks <https://arxiv.org/abs/1605.08831>`_ by Zagoruyko
+    et al.
 
     Parameters
     ----------
@@ -449,58 +836,116 @@ class WeightedResNet(BaseResNet):
         The network's input layer.
     bottleneck : boolean (``False``)
         Use the 3 layer bottleneck approach if ``True``.
-
-    Note: The ``type`` parameter was removed due to the change in
-    handling the increasing dimensions.
+    width : integer (``1``)
+        The parameter $k§ from the wide resnet approach.
+    block_config :  tuple of integers or integer pairs or ``None``
+        The list of convolutions in a residual block. The list describes
+        the filter size of each convolution in the block. The filter
+        size can be given as a tuple of integers or as a single integer,
+        in which case a quadratic filter is used. This was described as
+        parameter $B$ in the wide approach. In case of ``None``,
+        ``block_config`` is either ``(3, 3)`` or ``(1, 3, 1)`` depending
+        on ``bottleneck``.
+    dropout : a scalar between 0 and 1 (``0``)
+        The dropout probability for each dropout layer. In case the
+        dropout probability is ``0`` no dropout is applied.
     """
 
-    def __init__(self, incoming, bottleneck=False):
-        super(WeightedResNet, self).__init__(incoming, type=None,
-                                             bottleneck=bottleneck)
+    def __init__(self, *args, **kwargs):
+        super(WeightedResNet, self).__init__(*args, **kwargs)
         self.weights = []
 
+    def convolution(self, *args, **kwargs):
+        return BatchNormLayer(
+            super(WeightedResNet, self).convolution(*args, **kwargs))
+
     def shortcut(self, incoming, num_filters=None, dim_inc=False):
+        """Create a shortcut from ``incoming`` to ``residual``."""
+        num_filters *= self.width
         num_filters, stride, out_filters = get_dimensions(
             self.model, num_filters, dim_inc, self.bottleneck)
+
         if not dim_inc:
             return incoming
         return self.nonlinearity(self.convolution(
             self.model, out_filters, stride=stride))
 
     def residual(self, model, num_filters=None, dim_inc=False):
-        residual = super(WeightedResNet, self).residual(
-            model, num_filters=num_filters, dim_inc=dim_inc)
+        """Return a residual block."""
+        num_filters *= self.width
+        num_filters, first_stride, out_filters = get_dimensions(
+            model, num_filters, dim_inc, self.bottleneck)
+
+        residual = self.convolution(model, num_filters, stride=first_stride,
+                                    filter_size=self.block_config[0])
+        if self.bottleneck:
+            for filter_size in self.block_config[1:-1]:
+                residual = self.nonlinearity(residual)
+                if self.dropout > 0:
+                    residual = DropoutLayer(residual, self.dropout)
+                residual = self.convolution(residual, num_filters,
+                                            filter_size=filter_size)
+            residual = self.nonlinearity(residual)
+            if self.dropout > 0:
+                residual = DropoutLayer(residual, self.dropout)
+            residual = self.convolution(residual, out_filters,
+                                        filter_size=self.block_config[-1])
+        else:
+            for filter_size in self.block_config[1:]:
+                residual = self.nonlinearity(residual)
+                if self.dropout > 0:
+                    residual = DropoutLayer(residual, self.dropout)
+                residual = self.convolution(residual, num_filters,
+                                            filter_size=filter_size)
         residual = self.nonlinearity(residual)
-        self.residuals.append(residual)
+
         shared_axes = tuple(range(len(residual.output_shape)))
         residual = ScaleLayer(residual, Constant(0), shared_axes=shared_axes)
         residual.params[residual.scales].add('layer_weight')
         self.weights.append(residual)
+
         return residual
 
     def add_residual_block(self, num_filters=None, dim_inc=False):
+        """Add a residual block (residual + shortcut) to the network."""
         shortcut = self.shortcut(self.model, num_filters=num_filters,
                                  dim_inc=dim_inc)
         self.shortcuts.append(shortcut)
+
         residual = self.residual(shortcut, num_filters, dim_inc=False)
+        self.residuals.append(residual)
+
         self.model = ElemwiseSumLayer([residual, shortcut])
         self.resblocks.append(self.model)
 
     @classmethod
     def cifar_model(cls, n=9, incoming=None, classes=10, **kwargs):
-        """Create model for the CIFAR data set like in section 4.2.
+        """Create model for the CIFAR data set.
 
         Parameters
         ----------
         n : integer (``9``)
             A parameter used to govern the size of the network as
             described in the paper.
-        incoming :  a :class:`Layer` instance or ``None``
+        incoming :  a :class:`Layer` instance or ``None`` (``None``)
             The input layer, if it is ``None`` a new one will be created.
-        classes : integer (`10``)
+        classes : integer (``10``)
             The number of classes to train, usually ``10`` or ``100``.
-        kwargs : key-word arguments
-            The key-word arguments that get passed down to the constructor.
+        bottleneck : boolean (``False``)
+            Use the 3 layer bottleneck approach if ``True``.
+        width : integer (``1``)
+            The parameter $k§ from the wide resnet approach.
+        block_config :  tuple of integers or integer pairs or ``None``
+            The list of convolutions in a residual block. The list describes
+            the filter size of each convolution in the block. The filter
+            size can be given as a tuple of integers or as a single integer,
+            in which case a quadratic filter is used. This was described as
+            parameter $B$ in the wide approach. In case of ``None``,
+            ``block_config`` is either ``(3, 3)`` or ``(1, 3, 1)`` depending
+            on ``bottleneck``.
+        dropout : a scalar between 0 and 1 (``0``)
+            The dropout probability for each dropout layer. In case the
+            dropout probability is ``0`` no dropout is applied.
 
         Returns
         -------
@@ -510,10 +955,14 @@ class WeightedResNet(BaseResNet):
         model = incoming or InputLayer(shape=(None, 3, 32, 32))
         builder = cls(model, **kwargs)
 
-        num_filters = 64 if builder.bottleneck else 16
+        # first layer, output is 16 x 32 x 32
+        num_filters = 16 * builder.width
+        if builder.bottleneck:
+            num_filters *= 4
         model = builder.convolution(model, num_filters, init_gain=1.0)
         model = builder.nonlinearity(model)
         builder.model = model
+
         # first stack of residual blocks, output is 16 x 32 x 32
         for _ in range(n):
             builder.add_residual_block(16)
@@ -557,8 +1006,21 @@ class WeightedResNet(BaseResNet):
             The input layer, if it is ``None`` a new one will be created.
         classes : integer (``1000``)
             The number of classes to train, usually ``1000`'.
-        kwargs : key-word arguments
-            The key-word arguments that get passed down to the constructor.
+        bottleneck : boolean (``False``)
+            Use the 3 layer bottleneck approach if ``True``.
+        width : integer (``1``)
+            The parameter $k§ from the wide resnet approach.
+        block_config :  tuple of integers or integer pairs or ``None``
+            The list of convolutions in a residual block. The list describes
+            the filter size of each convolution in the block. The filter
+            size can be given as a tuple of integers or as a single integer,
+            in which case a quadratic filter is used. This was described as
+            parameter $B$ in the wide approach. In case of ``None``,
+            ``block_config`` is either ``(3, 3)`` or ``(1, 3, 1)`` depending
+            on ``bottleneck``.
+        dropout : a scalar between 0 and 1 (``0``)
+            The dropout probability for each dropout layer. In case the
+            dropout probability is ``0`` no dropout is applied.
 
         Returns
         -------
@@ -569,7 +1031,9 @@ class WeightedResNet(BaseResNet):
         model = incoming or InputLayer(shape=(None, 3, 224, 224))
         builder = cls(model, **kwargs)
 
-        num_filters = 256 if builder.bottleneck else 64
+        num_filters = 64 * builder.width
+        if builder.bottleneck:
+            num_filters *= 4
         model = builder.convolution(model, num_filters, filter_size=(7, 7),
                                     stride=(2, 2), init_gain=1.0)
         model = builder.nonlinearity(model)
@@ -599,202 +1063,8 @@ class WeightedResNet(BaseResNet):
         return model
 
 
-class WideResNet(BaseResNet):
-    """The residual network with wider residual blocks.
-
-    The network increases the number of channels of every residual block
-    in the network by a factor ``k``. The approach is described by
-    Zagoruyko et al. in the paper `Wide Residual Networks
-    <https://arxiv.org/abs/1605.07146>`_.
-    They also introduced dropout between the convolutional layers in the
-    residual blocks and a mechanism to vary the convulsions in a
-    residual block.
-
-    Parameters
-    ----------
-    incoming : instance of :class:`Layer`
-        The network's input layer.
-    type : ``'A'``, ``'B'`` or ``'C'`` (``'A'``)
-        The type of shortcuts to use.
-    bottleneck : boolean (``False``)
-        Use the 3 layer bottleneck approach if ``True``.
-    width : integer (`10``)
-        The growth rate as described by the parameter $k$ in the paper.
-        The network will have ``width`` times as many filters in every
-        layer (except the first and last ones) as the original approach.
-    block_config : list of integers, integers pairs or ``None``.
-        The list of convolutions in a residual block. The list describes
-        the filter size of each convolution in the block. The filter
-        size can be given as a tuple if integers or as a single integer,
-        in which case a quadratic filter is used. If ``None`` it will be
-        either ``(3, 3)`` or ``(1, 3, 1)`` depending on bottlenecking.
-    dropout : a scalar between 0 and 1 (``0.3``)
-        The dropout probability for each dropout layer. In case the
-        dropout probability is ``0`` no dropout is applied.
-
-    Note: Please make sure :class:`WideResNet` is before
-    :class:`BaseResNet` and :class:`PreResNet` in the MRO. This class
-    does not (yet) work together with :class:`WeightedResNet`.
-    """
-
-    def __init__(self, *args, width=10, block_config=None, dropout=0.3,
-                 bottleneck=False, **kwargs):
-        super(WideResNet, self).__init__(*args, bottleneck=bottleneck,
-                                         **kwargs)
-        self.width = width
-        if block_config is None:
-            block_config = (1, 3, 1) if bottleneck else (3, 3)
-        self.block_config = [b if isinstance(b, tuple) else (b, b)
-                             for b in block_config]
-        self.dropout = dropout
-        if bottleneck and len(block_config) < 3:
-            raise ValueError('In case of bottlenecking, a residual block'
-                             ' should have at least three layers.')
-
-    def _base_residual_(self, model, num_filters=None, dim_inc=False):
-        """Basic residual block (not pre-activation resnet)."""
-        num_filters *= self.width
-        num_filters, first_stride, out_filters = get_dimensions(
-            model, num_filters, dim_inc, self.bottleneck)
-
-        residual = self.convolution(model, num_filters, stride=first_stride,
-                                    filter_size=self.block_config[0])
-        if self.bottleneck:
-            for filter_size in self.block_config[1:-1]:
-                residual = self.nonlinearity(residual)
-                if self.dropout > 0:
-                    residual = DropoutLayer(residual, self.dropout)
-                residual = self.convolution(residual, num_filters,
-                                            filter_size=filter_size)
-            residual = self.nonlinearity(residual)
-            if self.dropout > 0:
-                residual = DropoutLayer(residual, self.dropout)
-            residual = self.convolution(residual, out_filters,
-                                        filter_size=self.block_config[-1])
-        else:
-            for filter_size in self.block_config[1:]:
-                residual = self.nonlinearity(residual)
-                if self.dropout > 0:
-                    residual = DropoutLayer(residual, self.dropout)
-                residual = self.convolution(residual, num_filters,
-                                            filter_size=filter_size)
-        return residual
-
-    def _pre_residual_(self, model, num_filters=None, dim_inc=False):
-        """Residual block for pre-resnet."""
-        num_filters *= self.width
-        num_filters, first_stride, out_filters = get_dimensions(
-            model, num_filters, dim_inc, self.bottleneck)
-
-        residual = self.nonlinearity(BatchNormLayer(model))
-        residual = self.convolution(residual, num_filters, stride=first_stride,
-                                    filter_size=self.block_config[0])
-        if self.bottleneck:
-            for filter_size in self.block_config[1:-1]:
-                residual = self.nonlinearity(BatchNormLayer(residual))
-                if self.dropout > 0:
-                    residual = DropoutLayer(residual, self.dropout)
-                residual = self.convolution(residual, num_filters,
-                                            filter_size=filter_size)
-            residual = self.nonlinearity(BatchNormLayer(residual))
-            if self.dropout > 0:
-                residual = DropoutLayer(residual, self.dropout)
-            residual = self.convolution(residual, out_filters,
-                                        filter_size=self.block_config[-1])
-        else:
-            for filter_size in self.block_config[1:]:
-                residual = self.nonlinearity(BatchNormLayer(residual))
-                if self.dropout > 0:
-                    residual = DropoutLayer(residual, self.dropout)
-                residual = self.convolution(residual, num_filters,
-                                            filter_size=filter_size)
-        return residual
-
-    def residual(self, *args, **kwargs):
-        if isinstance(self, PreResNet):
-            return self._pre_residual_(*args, **kwargs)
-        return self._base_residual_(*args, **kwargs)
-
-
-class ResNet(BaseResNet):
-    """Basic (Original) ResNet as in He et al. with some extras.
-
-    This class implements some additional approaches to deal with
-    increasing the dimensions.
-
-    Parameters
-    ----------
-    incoming : instance of :class:`Layer`
-        The network's input layer.
-    type : ``'A'``, ``'B'`` or ``'C'`` (``'A'``)
-        The type of shortcuts to use.
-    bottleneck : boolean (``False``)
-        Use the 3 layer bottleneck approach if ``True``.
-    dim_inc_meth : ``'1x1'``, ``'2x2'``, ``'avg'``, ``'max'`` or ``'sum'``
-        The type of projection method to use for increasing the
-        dimensions. This parameter will be ignored if the type of
-        shortcut is ``'A'`` because it uses padding. For the types
-        ``'B'`` and ``'C'`` there are multiple ways to change the
-        dimensions:
-
-        ``'1x1'`` will perform a 1x1 convolution with a 2x2 stride. This
-        is the original approach from the paper, but will discard 3/4 of
-        the input.
-
-        ``'2x2'`` will perform a 2x2 convolution with a 2x2 stride, which
-        will increase the amount of free parameters, but won't discard
-        any inputs.
-
-        ``'sum'``, ``'avg'``, ``'max'`` will perform a 1x1 convolution
-        (with a 1x1 stride) followed by either sum, average or max
-        pooling respectively. This will not lead to any increase in free
-        parameters and (hopefully) not discard any important information.
-
-        Note: In case of a RoR like structure the ``'2x2'`` method may
-        also perform a ``'4x4'`` or ``'8x8'`` convolution.
-
-    Note: Please make sure this class is before :class:`BaseResNet` and
-    :class:`PreResNet` in the MRO.
-    """
-
-    dim_inc_methods = ('1x1', '2x2', 'max', 'avg', 'sum')
-
-    def __init__(self, *args, dim_inc_meth='1x1', **kwargs):
-        super(ResNet, self).__init__(*args, **kwargs)
-
-        if dim_inc_meth not in self.dim_inc_methods:
-            raise ValueError(
-                'The method "{}" is not supported.'.format(dim_inc_meth))
-        self.pooling = dim_inc_meth in {'max', 'avg', 'sum'}
-        if dim_inc_meth == 'avg':
-            dim_inc_meth = 'average_exc_pad'
-        self.dim_inc = dim_inc_meth
-
-    def projection(self, model, num_filters, stride=(1, 1)):
-        if stride == (1, 1):
-            return super(ResNet, self).projection(model, num_filters,
-                                                  stride=stride)
-        filter_size = 1, 1
-        pad = 'same'
-        if self.dim_inc == '2x2':
-            filter_size = stride
-            pad = 'valid'
-        elif self.pooling:
-            oldstride = stride
-            stride = 1, 1
-
-        model = self.convolution(model, num_filters, filter_size,
-                                 stride=stride, pad=pad, init_gain=1.0)
-        if not isinstance(self, PreResNet):
-            model = BatchNormLayer(model)
-        if self.pooling:
-            model = Pool2DLayer(model, oldstride, ignore_border=False,
-                                mode=self.dim_inc)
-        return model
-
-
-class PReLuResNet(BaseResNet):
-    """A ResNet with the parametric rectifier as nonlinearity.
+class PReLuResNet(ResNetMixin):
+    """A resnet with the parametric rectifier as nonlinearity.
 
     This builder replaces the normal rectifying nonlinearity with the
     parametric one.
@@ -802,23 +1072,27 @@ class PReLuResNet(BaseResNet):
     Parameters
     ----------
     args : arguments
-        The arguments that gets passed down to the super class.
+        A number of arguments that will be passed down to the super
+        class.
     alpha : scalar (``0.25``)
         The initial value for the parameter of the parametric rectifier.
     kwargs : key-word arguments
-        The key-word arguments that gets passed down to the super class.
+        A number of key-word parameters that will be passed down to the
+        super class.
+
+    Note: This class does not work on its own, but requires either
+    ``ResNet``, ``PreResNet`` or ``WeightedResNet`` to be a super class.
     """
 
     def __init__(self, *args, alpha=0.25, **kwargs):
         super(PReLuResNet, self).__init__(*args, **kwargs)
         self.alpha = alpha
-        self.init_gain = numpy.sqrt(2 / (1 + alpha**2))
 
-    def convolution(self, model, *args, init_gain=None, **kwargs):
+    def convolution(self, *args, init_gain=None, **kwargs):
         if init_gain is None:
-            init_gain = self.init_gain
-        return super(PReLuResNet, self).convolution(
-            model, *args, init_gain=init_gain, **kwargs)
+            init_gain = numpy.sqrt(2 / (1 + self.alpha**2))
+        return super(PReLuResNet, self).convolution(*args, init_gain=init_gain,
+                                                    **kwargs)
 
     def nonlinearity(self, incoming):
         return ParametricRectifierLayer(incoming, alpha=Constant(self.alpha))
@@ -831,7 +1105,7 @@ def drop_layer(incoming, *args, **kwargs):
     return DropoutLayer(incoming, *args, **kwargs)
 
 
-class KnownDepth(BaseResNet):
+class KnownDepth(ResNetMixin):
     """A Network that has a predefined depth.
 
     The depth is here described by the number of residual blocks in
@@ -866,9 +1140,11 @@ class StochasticDepth(KnownDepth):
     Parameters
     ----------
     args : arguments
-        The arguments that gets passed down to the super class.
-    length : integer (``None``)
-        The total number of residual blocks.
+        A number of arguments that will be passed down to the super
+        class.
+    length : integer or None (``None``)
+        The total number of residual blocks. If case of ``None`` decay
+        con not be used.
     final_prob : float in [0, 1] (``0.5``)
         The final survival probability.
     decay : boolean (``True``)
@@ -878,16 +1154,16 @@ class StochasticDepth(KnownDepth):
         If ``True``, the output of the residual block will be scaled by
         ``1 / p_l`` while training (when ``deterministic=False``).
     kwargs : key-word arguments
-        The key-word arguments that gets passed down to the super class.
+        A number of key-word parameters that will be passed down to the
+        super class.
 
     Note 1: Huang et al. just dropped the residual block in training and
     scaled the output while testing. Like lasagne's ``DropoutLayer``
     we rescale the output while training and leave it unchanged in the
     test phase.
 
-    Note 2: Please make sure this class is before :class:`BaseResNet`,
-    :class:`PreResNet`, :class:`WeightedResNet` and most other classes
-    in the MRO.
+    Note 2: This class does not work on its own, but requires either
+    ``ResNet``, ``PreResNet`` or ``WeightedResNet`` to be a super class.
     """
 
     def __init__(self, *args, length=None, final_prob=0.5, decay=True,
@@ -923,9 +1199,10 @@ class RoR(KnownDepth):
 
     Parameters
     ----------
-    incoming : instance of :class:`Layer`
-        The network's input layer.
-    sortcut_lvl : integer (``3``)
+    args : arguments
+        A number of arguments that will be passed down to the super
+        class.
+    shortcut_lvl : integer (``3``)
         The shortcut level number to determine the shortcuts. If this
         is ``1`` it will yield the original (underling) resnet approach.
         If it is ``2`` it  will add a shortcut connection from the root
@@ -953,11 +1230,12 @@ class RoR(KnownDepth):
         into 3 groups. Shortcut connections are then added to those
         groups.
     kwargs : key-word arguments
-        The key-word arguments that get passed down to the super class.
+        A number of key-word parameters that will be passed down to the
+        super class.
 
-    Note: Please make sure this class is before :class:`BaseResNet`,
-    :class:`PreResNet` and :class:`WideResNet` in the MRO. This class
-    does not (yet) work together with :class:`WeightedResNet`.
+    Note: This class does not work on its own, but requires either
+    ``ResNet`` or ``PreResNet`` to be a super class and does not work
+    together with ``WeightedResNet``.
     """
 
     def __init__(self, *args, shortcut_lvl=3, type='ABB', length=None,
@@ -966,9 +1244,8 @@ class RoR(KnownDepth):
         # via splits you can also try to split it into four or five
         # parts if the number of residual block are dividable
         if len(type) > shortcut_lvl:
-            raise ValueError(
-                'Too many types for {} shortcusts: "{}".'.format(shortcut_lvl,
-                                                                 type))
+            raise ValueError('Too many types for '
+                             '{} shortcusts: "{}".'.format(shortcut_lvl, type))
         if len(type) < shortcut_lvl:
             type += type[-1:] * (shortcut_lvl - len(type))
         super(RoR, self).__init__(*args, **kwargs, type=type[0], length=length)
@@ -988,9 +1265,9 @@ class RoR(KnownDepth):
                 last = next(i for i, f in zip((int(i) for i in floats), floats)
                             if i == f)
                 if last <= 1:
-                    raise ValueError(
-                        'Your network is to shallow to have such a high level'
-                        ' number {} (length={}).'.format(shortcut_lvl, length))
+                    raise ValueError('Your network is to shallow to have such'
+                                     ' a high level number {} (L={}).'.format(
+                                         shortcut_lvl, length))
                 breakpoints.append(last)
             except StopIteration:
                 raise ValueError(
@@ -1036,7 +1313,7 @@ class RoR(KnownDepth):
             self.resblocks[-1] = model
 
 
-class MultiResNet(BaseResNet):
+class MultiResNet(ResNetMixin):
     """The Multi-Residual Networks.
 
     This class implements the "Multi-Residual Network" approach that
@@ -1050,21 +1327,23 @@ class MultiResNet(BaseResNet):
     Parameters
     ----------
     args : arguments
-        The arguments that gets passed down to the super class.
+        A number of arguments that will be passed down to the super
+        class.
     multiplicity : integer (``1``)
         The number of residuals per block.
     kwargs : key-word arguments
-        The key-word arguments that get passed down to the super class.
+        A number of key-word parameters that will be passed down to the
+        super class.
 
-    Note 1: Please make sure this class is before :class:`BaseResNet`,
-    :class:`PreResNet` :class:`WideResNet` or :class:`WeightedResNet`
-    in the MRO.
-    Note 2: If this class is mixed with :class:`StochasticDepth` the
+    Note 1: If this class is mixed with :class:`StochasticDepth` the
     order of those to classes is crucial. If :class:`StochasticDepth`
     is called first all residuals in a block share the same random
     variable and are thereby all dropped simultaneously. If
-    :class:`MultiResNet` if first some residuals in a block might be
+    :class:`MultiResNet` is first some residuals in a block might be
     dropped while some are not.
+
+    Note 2: This class does not work on its own, but requires either
+    ``ResNet``, ``PreResNet`` or ``WeightedResNet`` to be a super class.
     """
 
     def __init__(self, *args, multiplicity=1, **kwargs):
