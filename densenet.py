@@ -36,17 +36,21 @@ class DenseNet(object):
         In case of bottlenecking the first layer will return
        ``neck_size`` number of channels. If it is ``None`` the neck size
        will be set to four times the growth rate ($4 \cdot k$).
-    compression : number (float) in [0, 1] (``1``)
-        The compression level that is used, it is equal to the parameter
-        $\theta$ in the paper. If it is ``1`` no compression will be
-        done, if it is ``0.5`` the transition will output half as many
-        channels as it's input.
+    compression : number (float) in [0, 1] or integer (``0``)
+        The amount of compression to use. If this parameter is a number
+        in [0, 1) it will be interpreted as compression rate and will be
+        equivalent to $1 - \theta$, where $\theta$ is the parameter from
+        the paper. A compression rate of ``0.5`` will half the number of
+        channels in the the transition, ``0`` will perform no
+        compression.
+        If this number is a integer it describes the number of output
+        channels for the transition.
     dropout : number (float) in [0, 1] (``0``)
         the dropout probability, If it is ``0`` no  dropout is performed.
     """
 
     def __init__(self, incoming, growth=40, bottleneck=True, neck_size=None,
-                 compression=1, dropout=0):
+                 compression=0, dropout=0):
         self.current = incoming
         self.growth = growth
         self.bottleneck = bottleneck
@@ -108,13 +112,18 @@ class DenseNet(object):
         for _ in range(layers):
             self.dense_layer()
 
+    @property
+    def trans_ch(self):
+        """The number of channels used in the current transition."""
+        if self.compression >= 1:
+            return self.compression
+        return int(self.current.output_shape[1] * (1 - self.compression))
+
     def transition(self):
         """Add a transition."""
         model = self.batchnorm_pt2(self.current)
         model = self.nonlinearity(model)
-        model = self.convolution(
-            model, int(self.current.output_shape[1] * self.compression),
-            filter_size=(1, 1))
+        model = self.convolution(model, self.trans_ch, filter_size=(1, 1))
         model = self.dropout(model)
         model = Pool2DLayer(model, 2, mode='average_inc_pad')
         self.current = self.batchnorm_pt1(model)
@@ -141,11 +150,15 @@ class DenseNet(object):
             In case of bottlenecking the first layer will return
             ``neck_size`` number of channels. If it is ``None`` the neck
             size will be set to four times the growth rate ($4 \cdot k$).
-        compression : number (float) in [0, 1] (``1``)
-            The compression level that is used, it is equal to the
-            parameter $\theta$ in the paper. If it is ``1`` no
-            compression will be done, if it is ``0.5`` the transition
-            will output half as many channels as it's input.
+        compression : number (float) in [0, 1] or integer (``0``)
+            The amount of compression to use. If this parameter is a number
+            in [0, 1) it will be interpreted as compression rate and will be
+            equivalent to $1 - \theta$, where $\theta$ is the parameter from
+            the paper. A compression rate of ``0.5`` will half the number of
+            channels in the the transition, ``0`` will perform no
+            compression.
+            If this number is a integer it describes the number of output
+            channels for the transition.
         dropout : number (float) in [0, 1] (``0``)
             The dropout probability, If it is ``0`` no  dropout is
             performed.
@@ -158,7 +171,7 @@ class DenseNet(object):
         model = incoming or InputLayer(shape=(None, 3, 32, 32))
         builder = cls(model, **kwargs)
 
-        if builder.bottleneck and builder.compression < 1:
+        if builder.bottleneck and builder.compression:
             model = builder.convolution(model, 2 * builder.growth,
                                         init_gain=1.0)
         else:
@@ -204,11 +217,15 @@ class DenseNet(object):
             In case of bottlenecking the first layer will return
             ``neck_size`` number of channels. If it is ``None`` the neck
             size will be set to four times the growth rate ($4 \cdot k$).
-        compression : number (float) in [0, 1] (``1``)
-            The compression level that is used, it is equal to the
-            parameter $\theta$ in the paper. If it is ``1`` no
-            compression will be done, if it is ``0.5`` the transition
-            will output half as many channels as it's input.
+        compression : number (float) in [0, 1] or integer (``0``)
+            The amount of compression to use. If this parameter is a number
+            in [0, 1) it will be interpreted as compression rate and will be
+            equivalent to $1 - \theta$, where $\theta$ is the parameter from
+            the paper. A compression rate of ``0.5`` will half the number of
+            channels in the the transition, ``0`` will perform no
+            compression.
+            If this number is a integer it describes the number of output
+            channels for the transition.
         dropout : number (float) in [0, 1] (``0``)
             The dropout probability, If it is ``0`` no  dropout is
             performed.
@@ -290,11 +307,15 @@ class MyDenseNet(DenseNet):
         In case of bottlenecking the first layer will return
        ``neck_size`` number of channels. If it is ``None`` the neck size
        will be set to four times the growth rate ($4 \cdot k$).
-    compression : number (float) in [0, 1] (``1``)
-        The compression level that is used, it is equal to the parameter
-        $\theta$ in the paper. If it is ``1`` no compression will be
-        done, if it is ``0.5`` the transition will output half as many
-        channels as it's input.
+    compression : number (float) in [0, 1] or integer (``0``)
+        The amount of compression to use. If this parameter is a number
+        in [0, 1) it will be interpreted as compression rate and will be
+        equivalent to $1 - \theta$, where $\theta$ is the parameter from
+        the paper. A compression rate of ``0.5`` will half the number of
+        channels in the the transition, ``0`` will perform no
+        compression.
+        If this number is a integer it describes the number of output
+        channels for the transition.
     dropout : number (float) in [0, 1] (``0``)
         the dropout probability, If it is ``0`` no  dropout is performed.
     """
@@ -305,7 +326,7 @@ class MyDenseNet(DenseNet):
         return incoming
 
     def transition(self):
-        if self.compression < 1:
+        if self.compression:
             super(MyDenseNet, self).transition()
         else:
             self.current = Pool2DLayer(self.current, 2, mode='average_inc_pad')
