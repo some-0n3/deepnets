@@ -151,9 +151,12 @@ class BaseResNet(object):
             # if dimensions increase, B uses projections
             return self.projection(incoming, out_filters, stride=stride)
         elif type == 'A':
-            shortcut = ExpressionLayer(
-                incoming, lambda x: x[:, :, ::stride[0], ::stride[1]],
-                in_shape[:2] + out_shape[2:])
+            if not numpy.all(in_shape[2:] == out_shape[2:]):
+                shortcut = ExpressionLayer(
+                    incoming, lambda x: x[:, :, ::stride[0], ::stride[1]],
+                    in_shape[:2] + out_shape[2:])
+            else:
+                shortcut = incoming
             side = (out_filters - in_filters) // 2
             return PadLayer(shortcut, [side, 0, 0], batch_ndim=1)
 
