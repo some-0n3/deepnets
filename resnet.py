@@ -785,8 +785,6 @@ class ResNet(BaseResNet):
 
         model = self.convolution(model, num_filters, filter_size,
                                  stride=stride, pad=pad, init_gain=1.0)
-        if not isinstance(self, PreResNet):
-            model = BatchNormLayer(model)
         if self.pooling:
             model = Pool2DLayer(model, oldstride, ignore_border=False,
                                 mode=self.dim_inc)
