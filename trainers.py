@@ -42,8 +42,9 @@ class BaseTrainer(Trainer):
         target_var = tensor.ivector('targets')
         errors = OrderedDict()
 
-        loss, _ = loss_acc(self.model, input_var, target_var,
-                           deterministic=False)
+        loss, acc = loss_acc(self.model, input_var, target_var,
+                             deterministic=False)
+        errors['train_acc'] = acc
         errors['classification error'] = loss
         layers = get_all_layers(self.model)
         decay = regularize_layer_params(layers, l2) * self.weight_decay
