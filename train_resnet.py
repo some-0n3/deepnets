@@ -56,7 +56,7 @@ def main(config=None, init_path='', out_path='', batchsize=128, dataset='C10',
     """
     # network
     assert dataset in ('C10', 'C100', 'SVHN')
-    classes = 109 if dataset == 'C100' else 10
+    classes = 100 if dataset == 'C100' else 10
     bases = (PreResNet, ResNet) if pre else (ResNet, )
     if stoch_depth:
         bases = (StochasticDepth, ) + bases
